@@ -58,6 +58,7 @@ def log_alert(
         "zone_name": zone_name,
         "details": details,
         "acknowledged": False,
+        "resolution": None,  # None | "acknowledged" | "problem_fixed"
         "recording_url": recording_url,
     }
     alerts.append(alert)
@@ -81,10 +82,18 @@ def clear_alerts(data_dir: Path) -> None:
 
 def acknowledge_alert(data_dir: Path, alert_id: str) -> bool:
     """Mark a single alert as acknowledged. Returns True if found."""
+    return resolve_alert(data_dir, alert_id, "acknowledged")
+
+
+def resolve_alert(data_dir: Path, alert_id: str, resolution: str) -> bool:
+    """Set resolution for a single alert: 'acknowledged' or 'problem_fixed'. Returns True if found."""
+    if resolution not in ("acknowledged", "problem_fixed"):
+        return False
     alerts = _load(data_dir)
     for a in alerts:
         if a.get("alert_id") == alert_id:
             a["acknowledged"] = True
+            a["resolution"] = resolution
             _save(data_dir, alerts)
             return True
     return False

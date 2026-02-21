@@ -1,24 +1,24 @@
 """
 FastAPI backend: face registration, recognition, door detection, zone enforcement,
 and security alert logging.
-
-Feature 1 – Unauthorized door access:
-    When a door moves AND the last recognized face is unauthorized, an alert is fired
-    and logged to data/security_alerts.json.
-
-Feature 2 – Restricted zone enforcement:
-    Camera-view zones (polygons or boundary lines) are drawn by the operator.
-    On every analysis frame, YOLOv8n detects persons and checks whether they violate
-    any active zone for that feed.  Unauthorized violations are logged.
 """
 import io
 import logging
+import threading
 import time
 from pathlib import Path
 
+# Optional: load .env for ELEVENLABS_*, TWILIO_*, C_LEVEL_PHONE_NUMBERS, PUBLIC_BASE_URL
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+except ImportError:
+    pass
+
+from pydantic import BaseModel
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 logger = logging.getLogger(__name__)
@@ -80,7 +80,9 @@ from app.security_service import (
     clear_alerts,
     get_alerts,
     log_alert,
+    resolve_alert,
 )
+from app.twilio_service import send_zone_alert_sms
 from app.zone_service import check_zones, detect_persons, should_log_alert
 from app import body_tracker
 
@@ -205,6 +207,70 @@ def _maybe_log_door_alert(feed_id: int, door_result: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Auto incident-report generation (Nemotron VLM → Claude → PDF)
+# ---------------------------------------------------------------------------
+
+def _generate_incident_report_bg(alert_id: str, frame_bytes: bytes) -> None:
+    """Generate a PDF incident report in a background thread and link it to the alert."""
+    try:
+        from app.ai_analysis_service import analyze_frame_with_nemotron, write_report_with_claude
+        from app.report_service import generate_pdf_report
+        from app.security_service import _load as _sload, _save as _ssave
+
+        alerts = _sload(_data_dir)
+        alert = next((a for a in alerts if a.get("alert_id") == alert_id), None)
+        if not alert:
+            logger.warning("Auto-report: alert %s not found", alert_id)
+            return
+
+        zone_name = alert.get("zone_name", "Analyst Zone")
+        person_name = alert.get("person_name", "Unknown")
+
+        # Step 1: Nemotron VLM preprocesses the incident frame
+        nemotron = analyze_frame_with_nemotron(frame_bytes, zone_name, person_name)
+        logger.info("Auto-report: Nemotron VLM done for %s (available=%s)", alert_id, nemotron.get("available"))
+
+        # Step 2: Claude writes the formal report using VLM analysis
+        report_text = write_report_with_claude(alert, nemotron)
+        logger.info("Auto-report: Claude report done for %s", alert_id)
+
+        # Step 3: ReportLab generates the branded PDF
+        pdf_bytes = generate_pdf_report(alert, nemotron, report_text, _data_dir)
+
+        # Save PDF and threat image
+        reports_dir = _data_dir / "incident_reports"
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        pdf_path = reports_dir / f"{alert_id}.pdf"
+        pdf_path.write_bytes(pdf_bytes)
+
+        img_path = reports_dir / f"{alert_id}_threat.jpg"
+        img_path.write_bytes(frame_bytes)
+
+        # Link report to the alert
+        alerts = _sload(_data_dir)
+        for a in alerts:
+            if a.get("alert_id") == alert_id:
+                a["report_url"] = f"/api/security/reports/{alert_id}"
+                a["threat_image_url"] = f"/api/security/reports/{alert_id}/image"
+                break
+        _ssave(_data_dir, alerts)
+        logger.info("Auto-report: PDF saved and linked for %s", alert_id)
+
+    except Exception:
+        logger.exception("Auto-report generation failed for %s", alert_id)
+
+
+def _auto_generate_report(alert_id: str, frame_bytes: bytes) -> None:
+    """Kick off incident report generation in a background thread."""
+    t = threading.Thread(
+        target=_generate_incident_report_bg,
+        args=(alert_id, frame_bytes),
+        daemon=True,
+    )
+    t.start()
+
+
+# ---------------------------------------------------------------------------
 # Feature 2 helper – zone check + logging
 # ---------------------------------------------------------------------------
 
@@ -248,6 +314,17 @@ def _run_zone_check(
                         a["recording_url"] = rec_url
                         break
                 _ssave(_data_dir, saved)
+
+            # SMS alert: unauthorized person in restricted zone → Twilio SMS
+            send_zone_alert_sms(
+                zone_name=zname,
+                alert_type=atype,
+                person_name=za.get("person_name", "Unknown"),
+                details=f"Unauthorized person detected in restricted zone '{zname}'{suffix}",
+            )
+
+            # Auto-generate incident report (Nemotron VLM → Claude → PDF)
+            _auto_generate_report(alert["alert_id"], contents)
 
     return zone_alerts
 
@@ -629,6 +706,9 @@ async def feed_analyze(
 async def list_security_alerts(limit: int = 200):
     """Return recent security alerts, newest first."""
     alerts = get_alerts(_data_dir, limit=limit)
+    # Ensure resolution key exists for older alerts
+    for a in alerts:
+        a.setdefault("resolution", None)
     return AlertsListResponse(alerts=[SecurityAlert(**a) for a in alerts])
 
 
@@ -643,6 +723,21 @@ async def clear_security_alerts():
 async def acknowledge_security_alert(alert_id: str):
     """Mark a single alert as acknowledged."""
     found = acknowledge_alert(_data_dir, alert_id)
+    if not found:
+        raise HTTPException(404, "Alert not found")
+    return {"ok": True}
+
+
+class ResolveAlertBody(BaseModel):
+    resolution: str  # "acknowledged" | "problem_fixed"
+
+
+@app.post("/api/security/alerts/{alert_id}/resolve")
+async def resolve_security_alert(alert_id: str, body: ResolveAlertBody):
+    """C-level: mark alert as acknowledged or problem fixed."""
+    if body.resolution not in ("acknowledged", "problem_fixed"):
+        raise HTTPException(400, "resolution must be 'acknowledged' or 'problem_fixed'")
+    found = resolve_alert(_data_dir, alert_id, body.resolution)
     if not found:
         raise HTTPException(404, "Alert not found")
     return {"ok": True}
@@ -688,7 +783,82 @@ async def delete_camera_zone_endpoint(zone_id: str):
 
 
 # ===========================================================================
-# Violation recordings
+# Report generation: Nemotron VLM + Claude + ReportLab PDF
+# ===========================================================================
+
+@app.post("/api/security/alerts/{alert_id}/generate-report")
+async def generate_security_report(alert_id: str):
+    """
+    Run Nemotron VLM analysis on the incident frame, write a formal report
+    with Claude, and return a styled PDF for download.
+    """
+    from app.ai_analysis_service import analyze_frame_with_nemotron, write_report_with_claude
+    from app.report_service import generate_pdf_report
+    import asyncio, functools
+
+    alerts = get_alerts(_data_dir, limit=500)
+    alert = next((a for a in alerts if a.get("alert_id") == alert_id), None)
+    if not alert:
+        raise HTTPException(404, "Alert not found")
+
+    # Load frame bytes: extract first frame from GIF recording
+    gif_path = _data_dir / "recordings" / f"{alert_id}.gif"
+    frame_bytes: bytes | None = None
+    if gif_path.exists():
+        try:
+            from PIL import Image as _PILImg
+            gif = _PILImg.open(gif_path)
+            mid_frame = gif
+            try:
+                frames = []
+                while True:
+                    frames.append(gif.copy().convert("RGB"))
+                    gif.seek(gif.tell() + 1)
+                mid_frame = frames[len(frames) // 2] if frames else gif
+            except EOFError:
+                pass
+            buf = io.BytesIO()
+            mid_frame.save(buf, format="JPEG", quality=88)
+            frame_bytes = buf.getvalue()
+        except Exception as e:
+            logger.warning("Could not load frame from GIF: %s", e)
+
+    loop = asyncio.get_event_loop()
+
+    zone_name = alert.get("zone_name", "Analyst Zone")
+    person_name = alert.get("person_name", "Unknown")
+
+    # Run VLM + Claude in thread pool so we don't block the event loop
+    nemotron = await loop.run_in_executor(
+        None,
+        functools.partial(
+            analyze_frame_with_nemotron,
+            frame_bytes or b"",
+            zone_name,
+            person_name,
+        ),
+    )
+    report_text = await loop.run_in_executor(
+        None,
+        functools.partial(write_report_with_claude, alert, nemotron),
+    )
+    pdf_bytes = await loop.run_in_executor(
+        None,
+        functools.partial(generate_pdf_report, alert, nemotron, report_text, _data_dir),
+    )
+
+    short_id = alert_id[:8].upper()
+    filename = f"HOF-Security-Report-{short_id}.pdf"
+    from fastapi.responses import Response as _Resp
+    return _Resp(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# ===========================================================================
+# Violation recordings and voice (ElevenLabs + Twilio)
 # ===========================================================================
 
 @app.get("/api/security/recordings/{alert_id}")
@@ -698,6 +868,29 @@ async def get_recording(alert_id: str):
     if not path.exists():
         raise HTTPException(404, "Recording not found")
     return FileResponse(str(path), media_type="image/gif")
+
+
+@app.get("/api/security/reports/{alert_id}")
+async def get_incident_report(alert_id: str):
+    """Serve the auto-generated PDF incident report."""
+    path = _data_dir / "incident_reports" / f"{alert_id}.pdf"
+    if not path.exists():
+        raise HTTPException(404, "Incident report not yet generated")
+    short_id = alert_id[:8].upper()
+    return FileResponse(
+        str(path),
+        media_type="application/pdf",
+        filename=f"HOF-Security-Report-{short_id}.pdf",
+    )
+
+
+@app.get("/api/security/reports/{alert_id}/image")
+async def get_threat_image(alert_id: str):
+    """Serve the threat image captured at the time of the alert."""
+    path = _data_dir / "incident_reports" / f"{alert_id}_threat.jpg"
+    if not path.exists():
+        raise HTTPException(404, "Threat image not found")
+    return FileResponse(str(path), media_type="image/jpeg")
 
 
 # ===========================================================================

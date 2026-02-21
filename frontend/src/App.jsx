@@ -100,7 +100,14 @@ export default function App() {
   return (
     <div className="app">
       <div className="app-header">
-        <h1>Hof Capital — Security Dashboard</h1>
+        <div className="brand-row">
+          <div className="lockdown-brand">
+            <span className="lockdown-icon">🔒</span>
+            <span className="lockdown-text">LOCKDOWN</span>
+          </div>
+          <span className="brand-sep">|</span>
+          <h1 className="app-title">Hof Capital — Security Dashboard</h1>
+        </div>
         <div className="header-links">
           <div className="viewer-role-toggle">
             <span className="viewer-role-label">Viewing as:</span>

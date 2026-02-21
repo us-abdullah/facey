@@ -169,6 +169,7 @@ class SecurityAlert(BaseModel):
     zone_name: str | None
     details: str
     acknowledged: bool
+    resolution: str | None = None  # "acknowledged" | "problem_fixed" (C-level action)
     recording_url: str | None = None  # URL to animated GIF clip of the violation
 
 
