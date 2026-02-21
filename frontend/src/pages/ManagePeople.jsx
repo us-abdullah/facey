@@ -17,7 +17,7 @@ export default function ManagePeople({ onBack }) {
     fetch(`${API_BASE}/roles`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.statusText))))
       .then((data) => setRoles(data.roles || []))
-      .catch(() => setRoles(['Visitor', 'Worker', 'Admin']))
+      .catch(() => setRoles(['Visitor', 'Analyst', 'C-Level']))
   }
 
   const load = () => {

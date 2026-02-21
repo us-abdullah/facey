@@ -3,7 +3,7 @@ import React, { useState, useRef, useEffect } from 'react'
 export function RegisterFace({ apiBase }) {
   const [name, setName] = useState('')
   const [role, setRole] = useState('Visitor')
-  const [roles, setRoles] = useState(['Visitor', 'Worker', 'Admin'])
+  const [roles, setRoles] = useState(['Visitor', 'Analyst', 'C-Level'])
   const [file, setFile] = useState(null)
   const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(false)

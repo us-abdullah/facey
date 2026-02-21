@@ -661,3 +661,396 @@ body {
 .zone-edit-inline .edit-input {
   min-width: 120px;
 }
+
+/* ============================================================
+   Feature 1 + 2: Security Alerts Panel
+   ============================================================ */
+
+.security-alerts-section {
+  margin-bottom: 1rem;
+  padding: 0.75rem;
+  background: #18181b;
+  border: 1px solid #3f1f1f;
+  border-radius: 12px;
+}
+
+.security-toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  text-align: left;
+}
+
+.alert-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 9999px;
+  background: #ef4444;
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 0 0.3rem;
+}
+
+.alerts-panel {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid #27272a;
+}
+
+.alerts-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+  font-size: 0.8rem;
+  color: #a1a1aa;
+}
+
+.btn-clear-alerts {
+  padding: 0.25rem 0.6rem;
+  font-size: 0.75rem;
+  border-radius: 6px;
+  border: 1px solid #ef444466;
+  background: #ef444422;
+  color: #ef4444;
+  cursor: pointer;
+}
+
+.btn-clear-alerts:hover {
+  background: #ef444444;
+}
+
+.no-alerts-msg {
+  color: #52525b;
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.alerts-scroll {
+  max-height: 400px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.alert-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.alert-group-title {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #71717a;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 0.25rem;
+}
+
+.alert-row-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  border-left: 3px solid #ef4444;
+  border-radius: 6px;
+  background: #09090b;
+}
+
+.alert-row-item.acked {
+  opacity: 0.55;
+}
+
+.alert-type-icon {
+  font-size: 1rem;
+  flex-shrink: 0;
+  margin-top: 0.1rem;
+}
+
+.alert-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.alert-top {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.2rem;
+}
+
+.alert-top strong {
+  font-size: 0.8rem;
+}
+
+.alert-feed-badge {
+  font-size: 0.65rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  background: #27272a;
+  color: #a1a1aa;
+}
+
+.acked-badge {
+  font-size: 0.65rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  background: #22c55e22;
+  color: #22c55e;
+}
+
+.alert-person-line {
+  font-size: 0.8rem;
+  color: #e4e4e7;
+}
+
+.alert-role {
+  color: #a1a1aa;
+  margin-left: 0.2rem;
+}
+
+.alert-zone-name {
+  color: #f59e0b;
+}
+
+.alert-details-text {
+  font-size: 0.72rem;
+  color: #71717a;
+  margin-top: 0.15rem;
+}
+
+.alert-timestamp {
+  font-size: 0.65rem;
+  color: #52525b;
+  margin-top: 0.2rem;
+}
+
+.ack-btn {
+  padding: 0.2rem 0.45rem;
+  font-size: 0.7rem;
+  border-radius: 4px;
+  border: 1px solid #3f3f46;
+  background: #27272a;
+  color: #a3e635;
+  cursor: pointer;
+  flex-shrink: 0;
+  align-self: flex-start;
+}
+
+.ack-btn:hover {
+  background: #3f3f46;
+}
+
+/* ============================================================
+   Feature 2: Zone Drawing Controls
+   ============================================================ */
+
+/* Feed header update – allow zone button next to select */
+.feed-slot .header-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 1;
+}
+
+.zone-draw-btn {
+  padding: 0.3rem 0.55rem;
+  font-size: 0.7rem;
+  border-radius: 6px;
+  border: 1px solid #f59e0b66;
+  background: #f59e0b22;
+  color: #f59e0b;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.zone-draw-btn:hover {
+  background: #f59e0b44;
+}
+
+.zone-draw-panel {
+  padding: 0.75rem;
+  background: #09090b;
+  border-top: 1px solid #27272a;
+}
+
+.zone-draw-header {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #f59e0b;
+  margin-bottom: 0.5rem;
+}
+
+.zone-name-input {
+  width: 100%;
+  margin-bottom: 0.5rem;
+}
+
+.zone-type-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.4rem;
+  font-size: 0.75rem;
+  color: #a1a1aa;
+}
+
+.zone-draw-hint {
+  font-size: 0.72rem;
+  color: #71717a;
+  margin: 0 0 0.4rem 0;
+}
+
+.zone-draw-count {
+  font-size: 0.75rem;
+  color: #a1a1aa;
+  margin: 0 0 0.5rem 0;
+}
+
+.zone-draw-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* Zones list inside feed footer area */
+.feed-zones-list {
+  padding: 0.4rem 0.75rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  border-top: 1px solid #27272a;
+}
+
+.feed-zone-chip {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.5rem;
+  background: #09090b;
+  border: 1px solid #27272a;
+  border-radius: 20px;
+  font-size: 0.7rem;
+}
+
+.feed-zone-name {
+  color: #e4e4e7;
+  font-weight: 500;
+}
+
+.feed-zone-type {
+  color: #71717a;
+}
+
+.zone-delete-btn {
+  background: none;
+  border: none;
+  color: #52525b;
+  cursor: pointer;
+  font-size: 0.85rem;
+  line-height: 1;
+  padding: 0 0.1rem;
+}
+
+.zone-delete-btn:hover {
+  color: #ef4444;
+}
+
+/* Zone alert badge in feed footer */
+.zone-alert-badge {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.5rem;
+  background: #f59e0b22;
+  border: 1px solid #f59e0b55;
+  border-radius: 6px;
+  font-size: 0.7rem;
+  color: #f59e0b;
+}
+
+/* Viewer role toggle */
+.viewer-role-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: #18181b;
+  border: 1px solid #3f3f46;
+  border-radius: 8px;
+  padding: 0.2rem 0.5rem;
+}
+
+.viewer-role-label {
+  font-size: 0.75rem;
+  color: #71717a;
+}
+
+.viewer-role-btn {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: #a1a1aa;
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 0.2rem 0.6rem;
+  transition: all 0.15s;
+}
+
+.viewer-role-btn:hover {
+  color: #e4e4e7;
+  border-color: #52525b;
+}
+
+.viewer-role-btn.active {
+  background: #a3e63522;
+  border-color: #a3e635;
+  color: #a3e635;
+  font-weight: 600;
+}
+
+/* Analyst notice when live feeds are hidden */
+.analyst-notice {
+  background: #18181b;
+  border: 1px solid #3f3f46;
+  border-radius: 10px;
+  padding: 1rem 1.5rem;
+  margin: 0.5rem 0 1rem;
+  color: #71717a;
+  font-size: 0.9rem;
+}
+
+/* Violation recording clip */
+.alert-recording {
+  margin-top: 0.4rem;
+}
+
+.recording-toggle-btn {
+  background: none;
+  border: 1px solid #3f3f46;
+  border-radius: 6px;
+  color: #a3e635;
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 0.15rem 0.5rem;
+}
+
+.recording-toggle-btn:hover {
+  border-color: #a3e635;
+}
+
+.recording-gif {
+  display: block;
+  margin-top: 0.4rem;
+  max-width: 320px;
+  border-radius: 6px;
+  border: 1px solid #3f3f46;
+}

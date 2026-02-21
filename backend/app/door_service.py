@@ -21,8 +21,16 @@ _last_recognition: dict[int, dict] = {}  # feed_id -> { detections, timestamp }
 
 # Significant movement = mean abs diff in door ROI above this (0-1). Door open/close changes a lot.
 _DOOR_DIFF_THRESHOLD = 0.12
-# Min door crop side for diff (resize to this for stable comparison)
 _DOOR_CROP_SIZE = 64
+
+
+def _is_role_authorized(role: str | None, allowed_roles: list[str]) -> bool:
+    """C-Level (and legacy Admin) can open any door."""
+    if not role:
+        return False
+    if role.strip() in ("C-Level", "Admin"):
+        return True
+    return role.strip() in allowed_roles
 
 
 def _get_model_path() -> Path:
@@ -127,7 +135,7 @@ def _safe_fallback(feed_id: int, door_config: dict | None, areas: list[dict], hi
                 "identity_id": d.get("identity_id"),
             }
             role = (last_person.get("role") or "Visitor").strip()
-            allowed = role in allowed_roles
+            allowed = _is_role_authorized(role, allowed_roles)
     return {
         "doors": [],
         "movement_detected": False,
@@ -230,7 +238,7 @@ def detect_doors(image_bytes: bytes, feed_id: int, areas: list[dict], door_confi
                     "identity_id": d.get("identity_id"),
                 }
                 role = (last_person.get("role") or "Visitor").strip()
-                allowed = role in allowed_roles
+                allowed = _is_role_authorized(role, allowed_roles)
                 if movement_detected and not allowed:
                     alert = True
 

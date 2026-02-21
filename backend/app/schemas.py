@@ -12,6 +12,7 @@ class DetectionItem(BaseModel):
 
 class RecognizeResponse(BaseModel):
     detections: list[DetectionItem]
+    zone_alerts: list[dict] = []  # Feature 2: zone crossing/presence alerts
 
 
 class RegisterResponse(BaseModel):
@@ -138,8 +139,9 @@ class DoorDetectResponse(BaseModel):
     area_name: str | None
     last_person: dict | None  # { "name", "role", "identity_id" } or null
     allowed: bool  # True if last_person's role is in area's allowed_roles
-    alert: bool  # True if movement and not allowed (reaction hook later)
+    alert: bool  # True if movement and not allowed (Feature 1)
     hint: str | None = None  # Shown when no doors detected or detector unavailable
+    zone_alerts: list[dict] = []  # Feature 2: zone crossing/presence alerts
 
 
 # Combined face + door analysis on same frame (one feed = camera at door)
@@ -150,5 +152,60 @@ class FeedAnalyzeResponse(BaseModel):
     area_name: str | None
     last_person: dict | None
     allowed: bool
-    alert: bool
+    alert: bool  # Feature 1: unauthorized door access
     hint: str | None = None
+    zone_alerts: list[dict] = []  # Feature 2: zone crossing/presence alerts
+
+
+# --- Security alerts (persisted log) ---
+class SecurityAlert(BaseModel):
+    alert_id: str
+    timestamp: str
+    alert_type: str  # "unauthorized_door_access" | "zone_presence" | "line_crossing"
+    feed_id: int
+    person_name: str
+    person_role: str | None
+    authorized: bool
+    zone_name: str | None
+    details: str
+    acknowledged: bool
+    recording_url: str | None = None  # URL to animated GIF clip of the violation
+
+
+class AlertsListResponse(BaseModel):
+    alerts: list[SecurityAlert]
+
+
+# --- Camera-view zones (drawn on live video, per feed) ---
+class CameraZone(BaseModel):
+    id: str
+    feed_id: int
+    name: str
+    zone_type: str  # "polygon" | "line"
+    points: list[list[float]]  # [[x,y], ...] normalized 0-1
+    authorized_roles: list[str] = []
+    color: str = "#ef4444"
+    active: bool = True
+
+
+class CameraZonesListResponse(BaseModel):
+    zones: list[CameraZone]
+
+
+class CreateCameraZoneBody(BaseModel):
+    feed_id: int
+    name: str
+    zone_type: str = "polygon"
+    points: list[list[float]]
+    authorized_roles: list[str] = []
+    color: str = "#ef4444"
+    active: bool = True
+
+
+class UpdateCameraZoneBody(BaseModel):
+    name: str | None = None
+    zone_type: str | None = None
+    points: list[list[float]] | None = None
+    authorized_roles: list[str] | None = None
+    color: str | None = None
+    active: bool | None = None

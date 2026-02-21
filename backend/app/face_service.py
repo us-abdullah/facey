@@ -29,10 +29,10 @@ _arcface_output_name = None
 
 # Recognition: video frames often score lower than registration photo (lighting/angle). Keep threshold
 # low enough so registered people match; 0.45 is a good balance for live video.
-RECOGNITION_THRESHOLD = 0.45
-# Margin between best and second-best match. Smaller = accept when only one person is close (e.g. 0.03).
-RECOGNITION_MARGIN = 0.03
-DEFAULT_ROLES = ["Visitor", "Worker", "Admin"]
+RECOGNITION_THRESHOLD = 0.50
+# Margin between best and second-best match. Wider margin avoids misidentifying look-alikes.
+RECOGNITION_MARGIN = 0.07
+DEFAULT_ROLES = ["Visitor", "Analyst", "C-Level"]
 
 
 def _get_detector_haar():
