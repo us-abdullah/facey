@@ -318,13 +318,17 @@ async def recognize_face(
         except Exception as e:
             logger.warning("Body tracking failed: %s", e)
 
+    # Door service + zone attribution use raw face_dicts (single-frame, immediate identity).
+    # The live-video overlay uses `dicts` (body-tracked, debounced, stable).
     if feed_id is not None:
-        set_last_recognition(int(feed_id), dicts)
+        set_last_recognition(int(feed_id), face_dicts if face_dicts else dicts)
 
     zone_alerts: list[dict] = []
     try:
         if feed_id is not None:
-            zone_alerts = _run_zone_check(contents, int(feed_id), faces=dicts)
+            # Pass raw face detections so alert names are based on the current
+            # frame's recognised face, not the stricter body-tracker state.
+            zone_alerts = _run_zone_check(contents, int(feed_id), faces=face_dicts if face_dicts else dicts)
     except Exception as e:
         logger.warning("Zone check failed: %s", e)
 
@@ -589,7 +593,8 @@ async def feed_analyze(
     except Exception as e:
         logger.warning("Body tracking failed: %s", e)
 
-    set_last_recognition(int(feed_id), detections_dict)
+    # Door + zone attribution use raw face_dicts; live overlay uses body-tracked detections_dict.
+    set_last_recognition(int(feed_id), face_dicts if face_dicts else detections_dict)
 
     try:
         door_result = detect_doors(contents, int(feed_id), areas, door_config=door_config)
@@ -600,8 +605,8 @@ async def feed_analyze(
     # Feature 1: log unauthorized door alert
     _maybe_log_door_alert(int(feed_id), door_result)
 
-    # Feature 2: zone check with face context for identity correlation
-    zone_alerts = _run_zone_check(contents, int(feed_id), faces=detections_dict)
+    # Zone attribution uses raw face_dicts (immediate, single-frame identity).
+    zone_alerts = _run_zone_check(contents, int(feed_id), faces=face_dicts if face_dicts else detections_dict)
 
     return FeedAnalyzeResponse(
         detections=detections_dict,
