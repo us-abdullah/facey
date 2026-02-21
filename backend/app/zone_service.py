@@ -263,9 +263,18 @@ def check_zones(
 
             # ------------------------------------------------------------------
             # Polygon zone: presence detection
+            # Requires ALL FOUR corners of the person bbox to be inside the
+            # polygon so that merely clipping an edge doesn't trigger an alert.
             # ------------------------------------------------------------------
             if zone_type == "polygon" and len(points) >= 3:
-                if _point_in_polygon(fx, fy, points):
+                bx1, by1, bx2, by2 = person["bbox"]
+                corners_n = [
+                    (bx1 / w, by1 / h),  # top-left
+                    (bx2 / w, by1 / h),  # top-right
+                    (bx1 / w, by2 / h),  # bottom-left
+                    (bx2 / w, by2 / h),  # bottom-right
+                ]
+                if all(_point_in_polygon(cx, cy, points) for cx, cy in corners_n):
                     alerts.append({
                         "zone_id": zone_id,
                         "zone_name": zone_name,
