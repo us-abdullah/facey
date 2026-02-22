@@ -213,7 +213,7 @@ def _maybe_log_door_alert(feed_id: int, door_result: dict) -> None:
 def _generate_incident_report_bg(alert_id: str, frame_bytes: bytes) -> None:
     """Generate a PDF incident report in a background thread and link it to the alert."""
     try:
-        from app.ai_analysis_service import analyze_frame_with_nemotron, write_report_with_claude
+        from app.ai_analysis_service import analyze_frame_with_nemotron, escalate_with_nemotron_super, write_report_with_claude
         from app.report_service import generate_pdf_report
         from app.security_service import _load as _sload, _save as _ssave
 
@@ -230,12 +230,29 @@ def _generate_incident_report_bg(alert_id: str, frame_bytes: bytes) -> None:
         nemotron = analyze_frame_with_nemotron(frame_bytes, zone_name, person_name)
         logger.info("Auto-report: Nemotron VLM done for %s (available=%s)", alert_id, nemotron.get("available"))
 
-        # Step 2: Claude writes the formal report using VLM analysis
-        report_text = write_report_with_claude(alert, nemotron)
+        # Step 2: Nemotron Super escalation agent (only for unknown persons)
+        escalation = None
+        if person_name.lower() == "unknown":
+            escalation = escalate_with_nemotron_super(alert, nemotron)
+            logger.info(
+                "Auto-report: Nemotron Super escalation for %s → %s",
+                alert_id, escalation.get("escalation_level"),
+            )
+            # Send escalated SMS with the agent's custom message
+            from app.twilio_service import send_escalation_sms
+            send_escalation_sms(
+                escalation_level=escalation.get("escalation_level", "CRITICAL"),
+                sms_body=escalation.get("sms_message", ""),
+                zone_name=zone_name,
+                person_name=person_name,
+            )
+
+        # Step 3: Claude writes the formal report using VLM + escalation analysis
+        report_text = write_report_with_claude(alert, nemotron, escalation)
         logger.info("Auto-report: Claude report done for %s", alert_id)
 
-        # Step 3: ReportLab generates the branded PDF
-        pdf_bytes = generate_pdf_report(alert, nemotron, report_text, _data_dir)
+        # Step 4: ReportLab generates the branded PDF
+        pdf_bytes = generate_pdf_report(alert, nemotron, report_text, _data_dir, escalation)
 
         # Save PDF and threat image
         reports_dir = _data_dir / "incident_reports"
@@ -252,6 +269,9 @@ def _generate_incident_report_bg(alert_id: str, frame_bytes: bytes) -> None:
             if a.get("alert_id") == alert_id:
                 a["report_url"] = f"/api/security/reports/{alert_id}"
                 a["threat_image_url"] = f"/api/security/reports/{alert_id}/image"
+                if escalation:
+                    a["escalation_level"] = escalation.get("escalation_level")
+                    a["escalation_reasoning"] = escalation.get("reasoning")
                 break
         _ssave(_data_dir, alerts)
         logger.info("Auto-report: PDF saved and linked for %s", alert_id)

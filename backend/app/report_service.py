@@ -246,11 +246,13 @@ def generate_pdf_report(
     nemotron: dict,
     report_text: str,
     data_dir: Path,
+    escalation: dict | None = None,
 ) -> bytes:
     """
     Build and return the PDF as bytes.
     alert        – the security alert dict
     nemotron     – result from analyze_frame_with_nemotron()
+    escalation   – result from escalate_with_nemotron_super() (optional)
     report_text  – full written report from write_report_with_claude()
     data_dir     – backend data directory (to locate the GIF recording)
     """
@@ -551,6 +553,48 @@ def generate_pdf_report(
     ]))
     story.append(vlm_table)
     story.append(Spacer(1, 0.4 * cm))
+
+    # ===================================================================
+    # ESCALATION ASSESSMENT (Nemotron Super 49B)
+    # ===================================================================
+    if escalation and escalation.get("available"):
+        story.append(_section_banner(
+            "ESCALATION ASSESSMENT — NVIDIA NEMOTRON SUPER 49B", styles
+        ))
+        story.append(Spacer(1, 0.2 * cm))
+
+        esc_level = escalation.get("escalation_level", "CRITICAL")
+        esc_color = HOF_RED if esc_level == "CRITICAL" else HOF_AMBER if esc_level == "URGENT" else HexColor("#22c55e")
+        esc_style = ParagraphStyle(
+            "esc_inline",
+            parent=styles["field_value"],
+            fontName="Helvetica-Bold",
+            textColor=esc_color,
+        )
+
+        esc_rows = [
+            ("Reasoning", escalation.get("reasoning", "N/A")),
+            ("Notify Personnel", ", ".join(escalation.get("notify_personnel", []))),
+            ("Recommended Response", escalation.get("recommended_response", "N/A")),
+        ]
+        esc_table = Table(
+            [[Paragraph("Escalation Level", styles["field_label"]),
+              Paragraph(esc_level, esc_style)]]
+            + [[Paragraph(k, styles["field_label"]), Paragraph(v, styles["field_value"])]
+               for k, v in esc_rows],
+            colWidths=[CONTENT_W * 0.28, CONTENT_W * 0.72],
+        )
+        esc_table.setStyle(TableStyle([
+            ("TOPPADDING",    (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING",  (0, 0), (-1, -1), 6),
+            ("ROWBACKGROUNDS", (0, 0), (-1, -1), [HexColor("#f8fafc"), white]),
+            ("LINEBELOW", (0, 0), (-1, -2), 0.25, HexColor("#e2e8f0")),
+            ("VALIGN",    (0, 0), (-1, -1), "TOP"),
+        ]))
+        story.append(esc_table)
+        story.append(Spacer(1, 0.4 * cm))
 
     # ===================================================================
     # FORMAL WRITTEN REPORT (Claude)

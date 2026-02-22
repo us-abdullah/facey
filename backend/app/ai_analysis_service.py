@@ -1,7 +1,8 @@
 """
-AI Analysis Service:
-  1. NVIDIA Nemotron Nano 12B VL v2  – visual analysis of the incident frame
-  2. Anthropic Claude                – formal written security incident report
+AI Analysis Service – Multi-agent pipeline:
+  1. NVIDIA Nemotron Nano 12B VL v2    – visual analysis of the incident frame
+  2. NVIDIA Nemotron Super 49B (Agent) – threat escalation reasoning
+  3. Anthropic Claude                  – formal written security incident report
 
 Env vars:
   NVIDIA_API_KEY     – NVIDIA NIM API key (https://build.nvidia.com)
@@ -19,6 +20,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 NEMOTRON_MODEL = "nvidia/nemotron-nano-12b-v2-vl"
+NEMOTRON_SUPER_MODEL = "nvidia/llama-3.3-nemotron-super-49b-v1"
 NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 CLAUDE_MODEL = "claude-opus-4-5"
 
@@ -156,17 +158,125 @@ def analyze_frame_with_nemotron(
 
 
 # ---------------------------------------------------------------------------
+# Nemotron Super 49B – threat escalation agent
+# ---------------------------------------------------------------------------
+
+def escalate_with_nemotron_super(
+    alert: dict,
+    nemotron_vlm: dict,
+) -> dict:
+    """
+    Agent 2: Use Nemotron Super 49B to reason about threat escalation.
+    Takes the VLM analysis + alert metadata and returns an escalation decision.
+    Only called for unknown (unregistered) persons.
+
+    Returns dict with: escalation_level, notify_personnel, reasoning,
+    recommended_response, sms_message.
+    """
+    api_key = os.environ.get("NVIDIA_API_KEY")
+    if not api_key:
+        return _default_escalation()
+
+    zone_name = alert.get("zone_name", "Analyst Zone")
+    person_name = alert.get("person_name", "Unknown")
+    ts = alert.get("timestamp", "N/A")
+    threat_level = nemotron_vlm.get("threat_level", "HIGH")
+    phys = nemotron_vlm.get("physical_description", "Not available")
+    behavior = nemotron_vlm.get("behavior", "Not available")
+    observations = nemotron_vlm.get("observations", "Not available")
+
+    prompt = (
+        f"You are a security escalation agent at HOF Capital Management, "
+        f"a hedge fund at {LOCATION}. Your job is to analyze security incidents "
+        f"and decide the appropriate escalation level and response.\n\n"
+        f"INCIDENT DATA:\n"
+        f"Time: {ts}\n"
+        f"Zone: {zone_name}\n"
+        f"Subject: {person_name} ({'UNREGISTERED - not in face database' if person_name.lower() == 'unknown' else 'registered'})\n"
+        f"VLM Threat Level: {threat_level}\n"
+        f"Physical Description: {phys}\n"
+        f"Behavior: {behavior}\n"
+        f"Observations: {observations}\n\n"
+        f"Based on this data, return ONLY a JSON object with these keys:\n"
+        f'{{\n'
+        f'  "escalation_level": "<ROUTINE|URGENT|CRITICAL>",\n'
+        f'  "notify_personnel": ["<list of roles to notify, e.g. Floor Manager, Head of Security, CCO>"],\n'
+        f'  "reasoning": "<2-3 sentence explanation of why this escalation level was chosen>",\n'
+        f'  "recommended_response": "<specific immediate action to take>",\n'
+        f'  "sms_message": "<concise SMS alert message under 160 chars for security team>"\n'
+        f'}}\n\n'
+        f"Rules:\n"
+        f"- CRITICAL: unknown person, high threat, near sensitive data/systems\n"
+        f"- URGENT: unknown person in restricted zone, medium threat\n"
+        f"- ROUTINE: known person in wrong zone, low threat\n"
+        f"Return only valid JSON, no prose."
+    )
+
+    try:
+        import requests
+        r = requests.post(
+            NVIDIA_API_URL,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": NEMOTRON_SUPER_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 512,
+                "temperature": 0.1,
+            },
+            timeout=30,
+        )
+        r.raise_for_status()
+        content = r.json()["choices"][0]["message"]["content"].strip()
+        start = content.find("{")
+        end = content.rfind("}") + 1
+        if start >= 0 and end > start:
+            data = json.loads(content[start:end])
+            data["available"] = True
+            return data
+        return {**_default_escalation(), "available": True, "reasoning": content}
+    except Exception as e:
+        logger.exception("Nemotron Super escalation failed: %s", e)
+        return _default_escalation()
+
+
+def _default_escalation() -> dict:
+    return {
+        "available": False,
+        "escalation_level": "CRITICAL",
+        "notify_personnel": ["Head of Security", "Floor Manager"],
+        "reasoning": "Escalation agent unavailable. Defaulting to CRITICAL for unknown intruder.",
+        "recommended_response": "Dispatch security to the zone immediately.",
+        "sms_message": "CRITICAL: Unknown intruder in restricted zone. Dispatch security immediately.",
+    }
+
+
+# ---------------------------------------------------------------------------
 # Claude – formal written incident report
 # ---------------------------------------------------------------------------
 
-def write_report_with_claude(alert: dict, nemotron: dict) -> str:
+def _escalation_prompt_section(escalation: dict | None) -> str:
+    if not escalation or not escalation.get("available"):
+        return ""
+    return (
+        f"ESCALATION ASSESSMENT (NVIDIA Nemotron Super 49B Agent)\n"
+        f"Escalation Level: {escalation.get('escalation_level', 'CRITICAL')}\n"
+        f"Notify: {', '.join(escalation.get('notify_personnel', []))}\n"
+        f"Reasoning: {escalation.get('reasoning', 'N/A')}\n"
+        f"Recommended Response: {escalation.get('recommended_response', 'N/A')}\n\n"
+    )
+
+
+def write_report_with_claude(alert: dict, nemotron: dict, escalation: dict | None = None) -> str:
     """
     Use Claude to write a formal, professional security incident report.
     Falls back to a well-structured template if ANTHROPIC_API_KEY is not set.
     """
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
-        return _fallback_report(alert, nemotron)
+        return _fallback_report(alert, nemotron, escalation)
 
     person_name = alert.get("person_name", "Unknown")
     zone_name = alert.get("zone_name", "Analyst Zone")
@@ -209,11 +319,13 @@ def write_report_with_claude(alert: dict, nemotron: dict) -> str:
         f"Subject:       {subject_status}\n"
         f"Initial Log:   {alert.get('details', 'Unauthorized presence detected in restricted zone.')}\n\n"
         f"VLM ANALYSIS (NVIDIA Nemotron Nano 12B VL v2)\n{vlm_section}\n\n"
+        f"{_escalation_prompt_section(escalation)}"
         f"Write the report with these exact section headings (plain text, no markdown):\n"
         f"EXECUTIVE SUMMARY\n"
         f"INCIDENT DETAILS\n"
         f"SUBJECT PROFILE\n"
         f"VLM ANALYSIS SUMMARY\n"
+        f"ESCALATION ASSESSMENT\n"
         f"RISK ASSESSMENT\n"
         f"RECOMMENDED IMMEDIATE ACTIONS\n"
         f"COMPLIANCE NOTES\n\n"
@@ -233,10 +345,10 @@ def write_report_with_claude(alert: dict, nemotron: dict) -> str:
         return message.content[0].text.strip()
     except Exception as e:
         logger.exception("Claude report writing failed: %s", e)
-        return _fallback_report(alert, nemotron)
+        return _fallback_report(alert, nemotron, escalation)
 
 
-def _fallback_report(alert: dict, nemotron: dict) -> str:
+def _fallback_report(alert: dict, nemotron: dict, escalation: dict | None = None) -> str:
     name = alert.get("person_name", "Unknown")
     zone = alert.get("zone_name", "Analyst Zone")
     ts = alert.get("timestamp", "N/A")
@@ -272,6 +384,12 @@ def _fallback_report(alert: dict, nemotron: dict) -> str:
         f"Observed Behavior: {behavior}\n"
         f"Security Observations: {obs}\n"
         f"Threat Level: {tl}\n\n"
+        f"ESCALATION ASSESSMENT\n"
+        f"Analysis System: NVIDIA Nemotron Super 49B\n"
+        f"Escalation Level: {escalation.get('escalation_level', 'CRITICAL') if escalation else 'CRITICAL'}\n"
+        f"Notify: {', '.join(escalation.get('notify_personnel', ['Head of Security', 'Floor Manager'])) if escalation else 'Head of Security, Floor Manager'}\n"
+        f"Reasoning: {escalation.get('reasoning', 'Unknown intruder in restricted zone requires immediate escalation.') if escalation else 'Unknown intruder in restricted zone requires immediate escalation.'}\n"
+        f"Recommended Response: {escalation.get('recommended_response', 'Dispatch security to the zone immediately.') if escalation else 'Dispatch security to the zone immediately.'}\n\n"
         f"RISK ASSESSMENT\n"
         f"This incident is classified as {tl} priority. The Analyst Zone contains sensitive financial workstations, "
         f"proprietary trading data, and confidential HOF Capital research materials. Unauthorized access to this "
