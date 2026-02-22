@@ -4,6 +4,7 @@ import RegisterFace from './RegisterFace'
 import ManagePeople from './pages/ManagePeople'
 import FloorPlan from './pages/FloorPlan'
 import SecurityAlerts from './components/SecurityAlerts'
+import SecurityIntel from './pages/SecurityIntel'
 
 const API_BASE = '/api'
 
@@ -96,6 +97,9 @@ export default function App() {
       </div>
     )
   }
+  if (view === 'intel') {
+    return <SecurityIntel onBack={() => setView('dashboard')} />
+  }
 
   return (
     <div className="app">
@@ -122,6 +126,9 @@ export default function App() {
               </button>
             ))}
           </div>
+          <button type="button" onClick={() => setView('intel')} className="manage-link manage-btn">
+            Intelligence Center →
+          </button>
           <button type="button" onClick={() => setView('floorplan')} className="manage-link manage-btn">
             Floor plan →
           </button>

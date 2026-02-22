@@ -11,17 +11,27 @@ from pathlib import Path
 # Optional: load .env for ELEVENLABS_*, TWILIO_*, C_LEVEL_PHONE_NUMBERS, PUBLIC_BASE_URL
 try:
     from dotenv import load_dotenv
-    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+    # Look for .env in root directory (parent.parent.parent from backend/app/main.py)
+    load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 except ImportError:
     pass
 
 from pydantic import BaseModel
-from fastapi import FastAPI, File, Form, UploadFile, HTTPException
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 logger = logging.getLogger(__name__)
+# Configure root logger with very detailed logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+    ]
+)
+logger.setLevel(logging.DEBUG)
 
 from app.camera_zones_store import (
     add_camera_zone,
@@ -88,6 +98,35 @@ from app import body_tracker
 
 app = FastAPI(title="Hof Capital Inspection API", version="0.1.0")
 
+# Add request logging middleware
+@app.middleware("http")
+async def log_requests(request, call_next):
+    """Log all incoming requests with intense detail."""
+    logger.info("=" * 80)
+    logger.info(f"REQUEST: {request.method} {request.url.path}")
+    logger.info(f"Query params: {dict(request.query_params)}")
+    try:
+        response = await call_next(request)
+        logger.info(f"RESPONSE: {response.status_code} for {request.method} {request.url.path}")
+        if response.status_code >= 400:
+            logger.error(f"ERROR RESPONSE {response.status_code} for {request.method} {request.url.path}")
+        return response
+    except Exception as e:
+        logger.exception(f"EXCEPTION in {request.method} {request.url.path}: {e}")
+        raise
+
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint to verify backend is running."""
+    try:
+        # Test data directory
+        _data_dir.mkdir(parents=True, exist_ok=True)
+        return {"status": "ok", "data_dir": str(_data_dir)}
+    except Exception as e:
+        logger.exception("Health check failed: %s", e)
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request, exc):
@@ -95,7 +134,7 @@ async def unhandled_exception_handler(request, exc):
     if isinstance(exc, HTTPException):
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
     logger.exception("Unhandled exception: %s", exc)
-    return JSONResponse(status_code=500, content={"detail": str(exc)})
+    return JSONResponse(status_code=500, content={"detail": str(exc), "type": type(exc).__name__})
 
 
 app.add_middleware(
@@ -106,9 +145,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+logger.info("Initializing data directory...")
 _data_dir = Path(__file__).resolve().parent.parent / "data"
-_data_dir.mkdir(parents=True, exist_ok=True)
+logger.debug(f"Data directory path: {_data_dir}")
+try:
+    _data_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Data directory ready: {_data_dir}")
+except Exception as e:
+    logger.exception(f"Failed to create data directory: {e}")
+    raise
+
 _face_service: FaceService | None = None
+logger.info("Backend initialization complete")
 
 # ---------------------------------------------------------------------------
 # Frame buffer – keeps last ~3 s of frames per feed for violation recordings
@@ -170,8 +218,19 @@ def _save_recording(alert_id: str, feed_id: int) -> str | None:
 
 def get_face_service() -> FaceService:
     global _face_service
+    logger.debug(f"get_face_service called, _face_service is None: {_face_service is None}")
     if _face_service is None:
-        _face_service = FaceService(data_dir=_data_dir)
+        try:
+            logger.info(f"Initializing FaceService with data_dir: {_data_dir}")
+            _face_service = FaceService(data_dir=_data_dir)
+            logger.info("FaceService initialized successfully")
+        except Exception as e:
+            logger.exception(f"Failed to initialize FaceService: {e}")
+            logger.error(f"Exception type: {type(e).__name__}")
+            logger.error(f"Exception args: {e.args}")
+            raise
+    else:
+        logger.debug("Using existing FaceService instance")
     return _face_service
 
 
@@ -560,7 +619,8 @@ async def list_roles():
         svc = get_face_service()
         roles = svc.get_roles()
         return RolesListResponse(roles=roles if roles else ["Visitor", "Analyst", "C-Level"])
-    except Exception:
+    except Exception as e:
+        logger.exception("Error in /api/roles: %s", e)
         return RolesListResponse(roles=["Visitor", "Analyst", "C-Level"])
 
 
@@ -642,8 +702,19 @@ async def delete_floorplan_zone(zone_id: str):
 
 @app.get("/api/floorplan/doors", response_model=DoorsListResponse)
 async def list_floorplan_doors():
-    doors = load_doors(_data_dir)
-    return DoorsListResponse(doors=[DoorItem(**d) for d in doors])
+    logger.info("GET /api/floorplan/doors called")
+    try:
+        doors = load_doors(_data_dir)
+        logger.debug(f"Loaded {len(doors)} doors")
+        result = DoorsListResponse(doors=[DoorItem(**d) for d in doors])
+        return result
+    except Exception as e:
+        logger.exception("Error in /api/floorplan/doors: %s", e)
+        try:
+            return DoorsListResponse(doors=[])
+        except Exception as fallback_error:
+            logger.exception("Fallback failed: %s", fallback_error)
+            return JSONResponse(content={"doors": []})
 
 
 @app.post("/api/floorplan/doors", response_model=DoorItem)
@@ -680,19 +751,30 @@ _DEFAULT_DOOR_AREAS = [
 
 @app.get("/api/door/areas", response_model=DoorAreasResponse)
 async def get_door_areas():
+    logger.info("GET /api/door/areas called")
     try:
         areas = load_door_areas(_data_dir)
+        logger.debug(f"Loaded {len(areas)} door areas")
         out = []
         for a in areas:
             try:
                 out.append(DoorAreaItem(**a))
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Skipping invalid door area: {e}")
                 pass
         if not out:
+            logger.debug("No areas found, using defaults")
             out = [DoorAreaItem(**a) for a in _DEFAULT_DOOR_AREAS]
-        return DoorAreasResponse(areas=out)
-    except Exception:
-        return DoorAreasResponse(areas=[DoorAreaItem(**a) for a in _DEFAULT_DOOR_AREAS])
+        result = DoorAreasResponse(areas=out)
+        logger.info(f"Returning {len(result.areas)} door areas")
+        return result
+    except Exception as e:
+        logger.exception("Error in /api/door/areas: %s", e)
+        try:
+            return DoorAreasResponse(areas=[DoorAreaItem(**a) for a in _DEFAULT_DOOR_AREAS])
+        except Exception as fallback_error:
+            logger.exception("Fallback failed: %s", fallback_error)
+            return JSONResponse(content={"areas": [a for a in _DEFAULT_DOOR_AREAS]})
 
 
 @app.put("/api/door/areas", response_model=DoorAreasResponse)
@@ -807,11 +889,23 @@ async def feed_analyze(
 @app.get("/api/security/alerts", response_model=AlertsListResponse)
 async def list_security_alerts(limit: int = 200):
     """Return recent security alerts, newest first."""
-    alerts = get_alerts(_data_dir, limit=limit)
-    # Ensure resolution key exists for older alerts
-    for a in alerts:
-        a.setdefault("resolution", None)
-    return AlertsListResponse(alerts=[SecurityAlert(**a) for a in alerts])
+    logger.info(f"GET /api/security/alerts called with limit={limit}")
+    try:
+        alerts = get_alerts(_data_dir, limit=limit)
+        logger.debug(f"Retrieved {len(alerts)} alerts")
+        # Ensure resolution key exists for older alerts
+        for a in alerts:
+            a.setdefault("resolution", None)
+        result = AlertsListResponse(alerts=[SecurityAlert(**a) for a in alerts])
+        logger.info(f"Returning {len(result.alerts)} alerts")
+        return result
+    except Exception as e:
+        logger.exception("Error in /api/security/alerts: %s", e)
+        try:
+            return AlertsListResponse(alerts=[])
+        except Exception as fallback_error:
+            logger.exception("Fallback failed: %s", fallback_error)
+            return JSONResponse(content={"alerts": []})
 
 
 @app.delete("/api/security/alerts")
@@ -845,6 +939,153 @@ async def resolve_security_alert(alert_id: str, body: ResolveAlertBody):
     return {"ok": True}
 
 
+class GenieRequest(BaseModel):
+    prompt: str
+    viewer_email: str = "guest@restricted.local"
+
+
+@app.post("/api/genie")
+async def genie_chat(body: GenieRequest):
+    """Databricks Genie chat endpoint.
+    
+    Accepts JSON body with 'prompt' and 'viewer_email' fields.
+    """
+    logger.info("=" * 80)
+    logger.info("GENIE ENDPOINT CALLED")
+    logger.info(f"Prompt length: {len(body.prompt) if body.prompt else 0}")
+    logger.info(f"Prompt preview: {body.prompt[:200] if body.prompt else 'None'}")
+    logger.info(f"Viewer email: {body.viewer_email}")
+    logger.info("=" * 80)
+    
+    try:
+        if not body.prompt or not body.prompt.strip():
+            logger.warning("❌ Empty prompt received - returning 400")
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Prompt is required", "message": None, "sql_query": None}
+            )
+        
+        logger.info(f"✅ Valid prompt received: '{body.prompt[:100]}...'")
+        logger.info(f"📧 Viewer email: {body.viewer_email}")
+        
+        try:
+            from app.databricks_service import call_genie_api
+            logger.info("✅ Successfully imported call_genie_api")
+        except ImportError as import_err:
+            logger.error("❌ FAILED TO IMPORT call_genie_api")
+            logger.exception(f"Import error details: {import_err}")
+            return JSONResponse(
+                status_code=500,
+                content={"error": f"Import error: {str(import_err)}", "message": None, "sql_query": None}
+            )
+        
+        try:
+            logger.info("🔄 Calling call_genie_api...")
+            result = call_genie_api(body.prompt, body.viewer_email)
+            logger.info("✅ Genie API call successful")
+            logger.info(f"Result keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
+            logger.info(f"Message length: {len(result.get('message', '')) if result.get('message') else 0}")
+            logger.info(f"SQL query present: {result.get('sql_query') is not None}")
+            logger.info("=" * 80)
+            return JSONResponse(content=result)
+        except Exception as api_err:
+            logger.error("❌ GENIE API CALL FAILED")
+            logger.exception(f"Exception type: {type(api_err).__name__}")
+            logger.exception(f"Exception message: {str(api_err)}")
+            logger.exception(f"Full traceback:")
+            # Return a more user-friendly error
+            error_msg = str(api_err)
+            if "Databricks configuration is missing" in error_msg:
+                error_msg = "Databricks is not configured. Please check environment variables."
+            elif "Genie API returned" in error_msg:
+                error_msg = f"Databricks Genie API error: {error_msg}"
+            logger.error(f"Returning error response: {error_msg}")
+            logger.info("=" * 80)
+            return JSONResponse(
+                status_code=500,
+                content={"error": error_msg, "message": None, "sql_query": None}
+            )
+    except Exception as e:
+        logger.error("❌ UNEXPECTED ERROR IN GENIE ENDPOINT")
+        logger.exception(f"Exception type: {type(e).__name__}")
+        logger.exception(f"Exception message: {str(e)}")
+        logger.exception("Full traceback:")
+        logger.info("=" * 80)
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Unexpected error: {str(e)}", "message": None, "sql_query": None}
+        )
+
+
+@app.get("/api/security-intel")
+async def get_security_intelligence(limit: int = 20, email: str | None = None):
+    """Fetch security intelligence data from Databricks Intelligence Layer.
+    
+    Args:
+        limit: Maximum number of records to return
+        email: User email for dynamic masking. If 'mr6761@nyu.edu', reveals all data.
+    """
+    logger.info(f"Security intelligence request: limit={limit}, email={email}")
+    try:
+        from app.databricks_service import get_security_intelligence
+        logger.debug("Importing databricks_service successful")
+        
+        try:
+            data = get_security_intelligence(limit=limit, user_email=email)
+            logger.info(f"Retrieved {len(data)} intelligence records")
+        except Exception as databricks_error:
+            logger.exception(f"Databricks service error: {databricks_error}")
+            # Return empty data with error message instead of crashing
+            return JSONResponse(
+                status_code=200,  # Return 200 so frontend can display error
+                content={
+                    "intelligence": [],
+                    "count": 0,
+                    "error": f"Databricks connection error: {str(databricks_error)}"
+                }
+            )
+        
+        # Ensure all values are JSON serializable
+        serializable_data = []
+        for record in data:
+            try:
+                # Convert any non-serializable types
+                clean_record = {}
+                for key, value in record.items():
+                    if isinstance(value, (str, int, float, bool, type(None))):
+                        clean_record[key] = value
+                    elif isinstance(value, (list, dict)):
+                        # Try to serialize nested structures
+                        try:
+                            import json
+                            json.dumps(value)  # Test if serializable
+                            clean_record[key] = value
+                        except (TypeError, ValueError):
+                            clean_record[key] = str(value)
+                    else:
+                        clean_record[key] = str(value)
+                serializable_data.append(clean_record)
+            except Exception as e:
+                logger.warning(f"Error serializing record: {e}")
+                continue
+        
+        result = {"intelligence": serializable_data, "count": len(serializable_data)}
+        logger.debug(f"Returning {len(serializable_data)} records")
+        return JSONResponse(content=result)
+    except ImportError as e:
+        logger.error(f"Import error: {e}")
+        return JSONResponse(
+            status_code=200,  # Return 200 so frontend can display error
+            content={"intelligence": [], "count": 0, "error": f"Import error: {str(e)}"}
+        )
+    except Exception as e:
+        logger.exception("Failed to fetch security intelligence")
+        return JSONResponse(
+            status_code=200,  # Return 200 so frontend can display error
+            content={"intelligence": [], "count": 0, "error": f"Server error: {str(e)}"}
+        )
+
+
 # ===========================================================================
 # Camera-view zone endpoints  (Feature 2 zone management)
 # ===========================================================================
@@ -852,11 +1093,23 @@ async def resolve_security_alert(alert_id: str, body: ResolveAlertBody):
 @app.get("/api/camera-zones", response_model=CameraZonesListResponse)
 async def list_camera_zones(feed_id: int | None = None):
     """List camera-view zones. Optionally filter by feed_id."""
-    if feed_id is not None:
-        zones = get_zones_for_feed(_data_dir, feed_id)
-    else:
-        zones = load_camera_zones(_data_dir)
-    return CameraZonesListResponse(zones=[CameraZone(**z) for z in zones])
+    logger.info(f"GET /api/camera-zones called with feed_id={feed_id}")
+    try:
+        if feed_id is not None:
+            zones = get_zones_for_feed(_data_dir, feed_id)
+        else:
+            zones = load_camera_zones(_data_dir)
+        logger.debug(f"Loaded {len(zones)} camera zones")
+        result = CameraZonesListResponse(zones=[CameraZone(**z) for z in zones])
+        logger.info(f"Returning {len(result.zones)} zones")
+        return result
+    except Exception as e:
+        logger.exception("Error in /api/camera-zones: %s", e)
+        try:
+            return CameraZonesListResponse(zones=[])
+        except Exception as fallback_error:
+            logger.exception("Fallback failed: %s", fallback_error)
+            return JSONResponse(content={"zones": []})
 
 
 @app.post("/api/camera-zones", response_model=CameraZone)
