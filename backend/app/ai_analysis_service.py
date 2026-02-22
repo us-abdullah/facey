@@ -164,11 +164,15 @@ def analyze_frame_with_nemotron(
 def escalate_with_nemotron_super(
     alert: dict,
     nemotron_vlm: dict,
+    person_context: dict | None = None,
 ) -> dict:
     """
     Agent 2: Use Nemotron Super 49B to reason about threat escalation.
-    Takes the VLM analysis + alert metadata and returns an escalation decision.
-    Only called for unknown (unregistered) persons.
+    Takes the VLM analysis + alert metadata + Supabase person context
+    and returns an escalation decision.
+
+    person_context comes from supabase_service.get_person_context() and
+    includes: profile (registration data), prior_incidents, visitor_events.
 
     Returns dict with: escalation_level, notify_personnel, reasoning,
     recommended_response, sms_message.
@@ -185,6 +189,44 @@ def escalate_with_nemotron_super(
     behavior = nemotron_vlm.get("behavior", "Not available")
     observations = nemotron_vlm.get("observations", "Not available")
 
+    # Build database context section from Supabase
+    db_context = ""
+    if person_context:
+        profile = person_context.get("profile")
+        prior = person_context.get("prior_incidents", [])
+        visitor = person_context.get("visitor_events", [])
+
+        if profile:
+            db_context += (
+                f"\nDATABASE PROFILE (from Supabase):\n"
+                f"  Registered Name: {profile.get('name', 'N/A')}\n"
+                f"  Role: {profile.get('role', 'N/A')}\n"
+                f"  Authorized: {profile.get('authorized', False)}\n"
+                f"  Is Visitor: {profile.get('is_visitor', False)}\n"
+                f"  Registered At: {profile.get('registered_at', 'N/A')}\n"
+            )
+        else:
+            db_context += "\nDATABASE PROFILE: No matching profile found – person is NOT registered in the system.\n"
+
+        if prior:
+            db_context += f"\nPRIOR INCIDENTS ({len(prior)} on record):\n"
+            for i, inc in enumerate(prior[:5], 1):
+                db_context += (
+                    f"  {i}. [{inc.get('timestamp', '?')}] {inc.get('alert_type', '?')} "
+                    f"in {inc.get('zone_name', '?')} – escalation: {inc.get('escalation_level', 'N/A')}, "
+                    f"resolution: {inc.get('resolution', 'unresolved')}\n"
+                )
+        else:
+            db_context += "\nPRIOR INCIDENTS: None on record (first time detected).\n"
+
+        if visitor:
+            db_context += f"\nVISITOR LOG ({len(visitor)} events):\n"
+            for v in visitor[:3]:
+                db_context += (
+                    f"  - {v.get('action', '?')} at {v.get('event_time', '?')} "
+                    f"in {v.get('zone_name', 'N/A')}\n"
+                )
+
     prompt = (
         f"You are a security escalation agent at HOF Capital Management, "
         f"a hedge fund at {LOCATION}. Your job is to analyze security incidents "
@@ -196,7 +238,8 @@ def escalate_with_nemotron_super(
         f"VLM Threat Level: {threat_level}\n"
         f"Physical Description: {phys}\n"
         f"Behavior: {behavior}\n"
-        f"Observations: {observations}\n\n"
+        f"Observations: {observations}\n"
+        f"{db_context}\n"
         f"Based on this data, return ONLY a JSON object with these keys:\n"
         f'{{\n'
         f'  "escalation_level": "<ROUTINE|URGENT|CRITICAL>",\n'
@@ -206,9 +249,10 @@ def escalate_with_nemotron_super(
         f'  "sms_message": "<concise SMS alert message under 160 chars for security team>"\n'
         f'}}\n\n'
         f"Rules:\n"
-        f"- CRITICAL: unknown person, high threat, near sensitive data/systems\n"
-        f"- URGENT: unknown person in restricted zone, medium threat\n"
-        f"- ROUTINE: known person in wrong zone, low threat\n"
+        f"- CRITICAL: unknown person, high threat, near sensitive data/systems, OR repeat offender with unresolved prior incidents\n"
+        f"- URGENT: unknown person in restricted zone, medium threat, OR known person repeatedly violating zone access\n"
+        f"- ROUTINE: known person in wrong zone, low threat, first-time or resolved prior incidents\n"
+        f"- Factor in the person's database profile and incident history when deciding escalation level.\n"
         f"Return only valid JSON, no prose."
     )
 

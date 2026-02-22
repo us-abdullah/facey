@@ -66,6 +66,14 @@ def log_alert(
     if len(alerts) > 1000:
         alerts = alerts[-1000:]
     _save(data_dir, alerts)
+
+    # Sync to Supabase (fire-and-forget, local JSON is source of truth)
+    try:
+        from app.supabase_service import upsert_incident
+        upsert_incident(alert)
+    except Exception:
+        pass
+
     return alert
 
 
@@ -78,6 +86,11 @@ def get_alerts(data_dir: Path, limit: int = 200) -> list[dict]:
 def clear_alerts(data_dir: Path) -> None:
     """Delete all alerts."""
     _save(data_dir, [])
+    try:
+        from app.supabase_service import clear_incidents
+        clear_incidents()
+    except Exception:
+        pass
 
 
 def acknowledge_alert(data_dir: Path, alert_id: str) -> bool:
@@ -95,5 +108,10 @@ def resolve_alert(data_dir: Path, alert_id: str, resolution: str) -> bool:
             a["acknowledged"] = True
             a["resolution"] = resolution
             _save(data_dir, alerts)
+            try:
+                from app.supabase_service import resolve_incident
+                resolve_incident(alert_id, resolution)
+            except Exception:
+                pass
             return True
     return False

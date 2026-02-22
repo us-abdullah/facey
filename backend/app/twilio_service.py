@@ -1,12 +1,13 @@
-"""Twilio SMS alerting for restricted-zone violations."""
+"""Twilio SMS + voice call alerting for restricted-zone violations."""
 
 import logging
 import os
+from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
 # ── Defaults ──────────────────────────────────────────────────────────────
-DEFAULT_ALERT_TO = "+18777804236"
+DEFAULT_ALERT_TO = "+17326948445"
 DEFAULT_MESSAGING_SERVICE_SID = "MGbeabe48cb26d252c506513ebe01f22b9"
 ZONE_ALERT_BODY = "Intruder detected! check dashboard in analyst area"
 
@@ -107,6 +108,89 @@ def send_escalation_sms(
     except Exception:
         logger.exception(
             "Failed to send escalation SMS level=%s zone=%s",
+            escalation_level,
+            zone_name,
+        )
+        return False
+
+
+def send_escalation_voice_call(
+    escalation_level: str,
+    zone_name: str,
+    person_name: str,
+    reasoning: str = "",
+) -> bool:
+    """Place a voice call via Twilio that reads the escalation alert aloud.
+
+    Uses Twilio's built-in <Say> TwiML with a TwiML Bin-style inline URL.
+    Only called alongside send_escalation_sms for unknown persons.
+
+    Returns True on success, False otherwise.
+    """
+    account_sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
+    auth_token = os.environ.get("TWILIO_AUTH_TOKEN", "")
+
+    if not account_sid or not auth_token:
+        logger.warning("TWILIO creds not set – skipping escalation voice call")
+        return False
+
+    to_number = os.environ.get("TWILIO_ALERT_TO", DEFAULT_ALERT_TO)
+
+    # Build the spoken message
+    subject = "an unregistered individual" if person_name.lower() == "unknown" else person_name
+    spoken = (
+        f"HOF Capital Security Alert. {escalation_level} level. "
+        f"{subject} detected in {zone_name}. "
+    )
+    if reasoning:
+        spoken += f"{reasoning} "
+    spoken += "Please check the security dashboard immediately."
+
+    # Use inline TwiML via the `twiml` parameter (no hosted URL needed)
+    twiml = (
+        f'<Response>'
+        f'<Say voice="Polly.Joanna" language="en-US">{spoken}</Say>'
+        f'<Pause length="1"/>'
+        f'<Say voice="Polly.Joanna" language="en-US">Repeating. {spoken}</Say>'
+        f'</Response>'
+    )
+
+    try:
+        from twilio.rest import Client
+
+        client = Client(account_sid, auth_token)
+
+        # Get a Twilio phone number from the account to use as caller ID
+        from_number = os.environ.get("TWILIO_FROM_NUMBER", "")
+        if not from_number:
+            # Use the messaging service's phone number or first available number
+            try:
+                numbers = client.incoming_phone_numbers.list(limit=1)
+                if numbers:
+                    from_number = numbers[0].phone_number
+            except Exception:
+                pass
+
+        if not from_number:
+            logger.warning("No TWILIO_FROM_NUMBER and no numbers on account – skipping call")
+            return False
+
+        call = client.calls.create(
+            twiml=twiml,
+            to=to_number,
+            from_=from_number,
+        )
+        logger.info(
+            "Escalation voice call placed (sid=%s) level=%s zone=%s to=%s",
+            call.sid,
+            escalation_level,
+            zone_name,
+            to_number,
+        )
+        return True
+    except Exception:
+        logger.exception(
+            "Failed to place escalation voice call level=%s zone=%s",
             escalation_level,
             zone_name,
         )

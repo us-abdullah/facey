@@ -153,6 +153,15 @@ def _save_recording(alert_id: str, feed_id: int) -> str | None:
             duration=400,
             optimize=False,
         )
+        # Upload GIF to Supabase Storage
+        try:
+            from app.supabase_service import upload_recording, update_incident_field
+            gif_bytes = path.read_bytes()
+            storage_url = upload_recording(alert_id, gif_bytes)
+            if storage_url:
+                update_incident_field(alert_id, recording_storage_path=f"{alert_id}.gif")
+        except Exception as e:
+            logger.debug("Supabase recording upload skipped: %s", e)
         return f"/api/security/recordings/{alert_id}"
     except Exception as e:
         logger.warning("Could not save recording: %s", e)
@@ -230,21 +239,34 @@ def _generate_incident_report_bg(alert_id: str, frame_bytes: bytes) -> None:
         nemotron = analyze_frame_with_nemotron(frame_bytes, zone_name, person_name)
         logger.info("Auto-report: Nemotron VLM done for %s (available=%s)", alert_id, nemotron.get("available"))
 
-        # Step 2: Nemotron Super escalation agent (only for unknown persons)
+        # Step 2: Nemotron Super escalation agent – query Supabase for person context first
         escalation = None
+        person_context = None
+        try:
+            from app.supabase_service import get_person_context
+            person_context = get_person_context(person_name)
+        except Exception as e:
+            logger.debug("Supabase person context lookup skipped: %s", e)
+
         if person_name.lower() == "unknown":
-            escalation = escalate_with_nemotron_super(alert, nemotron)
+            escalation = escalate_with_nemotron_super(alert, nemotron, person_context)
             logger.info(
                 "Auto-report: Nemotron Super escalation for %s → %s",
                 alert_id, escalation.get("escalation_level"),
             )
-            # Send escalated SMS with the agent's custom message
-            from app.twilio_service import send_escalation_sms
+            # Send escalated SMS + voice call with the agent's analysis
+            from app.twilio_service import send_escalation_sms, send_escalation_voice_call
             send_escalation_sms(
                 escalation_level=escalation.get("escalation_level", "CRITICAL"),
                 sms_body=escalation.get("sms_message", ""),
                 zone_name=zone_name,
                 person_name=person_name,
+            )
+            send_escalation_voice_call(
+                escalation_level=escalation.get("escalation_level", "CRITICAL"),
+                zone_name=zone_name,
+                person_name=person_name,
+                reasoning=escalation.get("reasoning", ""),
             )
 
         # Step 3: Claude writes the formal report using VLM + escalation analysis
@@ -254,7 +276,7 @@ def _generate_incident_report_bg(alert_id: str, frame_bytes: bytes) -> None:
         # Step 4: ReportLab generates the branded PDF
         pdf_bytes = generate_pdf_report(alert, nemotron, report_text, _data_dir, escalation)
 
-        # Save PDF and threat image
+        # Save PDF and threat image locally
         reports_dir = _data_dir / "incident_reports"
         reports_dir.mkdir(parents=True, exist_ok=True)
         pdf_path = reports_dir / f"{alert_id}.pdf"
@@ -263,12 +285,48 @@ def _generate_incident_report_bg(alert_id: str, frame_bytes: bytes) -> None:
         img_path = reports_dir / f"{alert_id}_threat.jpg"
         img_path.write_bytes(frame_bytes)
 
-        # Link report to the alert
+        # Step 5: ElevenLabs TTS – spoken alert for dashboard auto-play
+        audio_url = None
+        try:
+            from app.elevenlabs_service import generate_alert_audio, build_alert_announcement
+            announcement = build_alert_announcement(alert, escalation, nemotron)
+            audio_bytes = generate_alert_audio(announcement)
+            if audio_bytes:
+                audio_dir = _data_dir / "alert_audio"
+                audio_dir.mkdir(parents=True, exist_ok=True)
+                audio_path = audio_dir / f"{alert_id}.mp3"
+                audio_path.write_bytes(audio_bytes)
+                audio_url = f"/api/security/alerts/{alert_id}/audio"
+                logger.info("Auto-report: ElevenLabs TTS saved for %s", alert_id)
+        except Exception as e:
+            logger.debug("ElevenLabs TTS skipped: %s", e)
+
+        # Upload to Supabase Storage
+        try:
+            from app.supabase_service import upload_report, upload_threat_image, update_incident_field
+            upload_report(alert_id, pdf_bytes)
+            upload_threat_image(alert_id, frame_bytes)
+            sb_fields = {
+                "report_storage_path": f"{alert_id}.pdf",
+                "threat_image_storage_path": f"{alert_id}.jpg",
+                "report_url": f"/api/security/reports/{alert_id}",
+                "threat_image_url": f"/api/security/reports/{alert_id}/image",
+            }
+            if escalation:
+                sb_fields["escalation_level"] = escalation.get("escalation_level")
+                sb_fields["escalation_reasoning"] = escalation.get("reasoning")
+            update_incident_field(alert_id, **sb_fields)
+        except Exception as e:
+            logger.debug("Supabase report upload skipped: %s", e)
+
+        # Link report to the local alert JSON
         alerts = _sload(_data_dir)
         for a in alerts:
             if a.get("alert_id") == alert_id:
                 a["report_url"] = f"/api/security/reports/{alert_id}"
                 a["threat_image_url"] = f"/api/security/reports/{alert_id}/image"
+                if audio_url:
+                    a["audio_url"] = audio_url
                 if escalation:
                     a["escalation_level"] = escalation.get("escalation_level")
                     a["escalation_reasoning"] = escalation.get("reasoning")
@@ -370,6 +428,12 @@ async def register_face(
     try:
         svc = get_face_service()
         identity_id, message = svc.register(contents, name, role=role or "Visitor")
+        # Sync to Supabase
+        try:
+            from app.supabase_service import upsert_person
+            upsert_person(identity_id, name, role or "Visitor", authorized=True)
+        except Exception:
+            pass
         return RegisterResponse(identity_id=identity_id, name=name, message=message)
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -453,6 +517,18 @@ async def update_face(identity_id: str, body: UpdateFaceBody):
     svc = get_face_service()
     try:
         svc.update_face(identity_id, name=body.name, role=body.role, authorized=body.authorized)
+        # Sync to Supabase
+        try:
+            from app.supabase_service import upsert_person
+            meta = svc.get_face_meta(identity_id) if hasattr(svc, 'get_face_meta') else {}
+            upsert_person(
+                identity_id,
+                body.name or meta.get("name", ""),
+                body.role or meta.get("role", "Visitor"),
+                authorized=body.authorized if body.authorized is not None else True,
+            )
+        except Exception:
+            pass
         return {"ok": True}
     except ValueError as e:
         raise HTTPException(404, str(e))
@@ -463,6 +539,12 @@ async def delete_face(identity_id: str):
     svc = get_face_service()
     try:
         svc.delete_face(identity_id)
+        # Remove from Supabase
+        try:
+            from app.supabase_service import delete_person
+            delete_person(identity_id)
+        except Exception:
+            pass
         return {"ok": True}
     except ValueError as e:
         raise HTTPException(404, str(e))
@@ -902,6 +984,15 @@ async def get_incident_report(alert_id: str):
         media_type="application/pdf",
         filename=f"HOF-Security-Report-{short_id}.pdf",
     )
+
+
+@app.get("/api/security/alerts/{alert_id}/audio")
+async def get_alert_audio(alert_id: str):
+    """Serve the ElevenLabs TTS audio announcement for a security alert."""
+    path = _data_dir / "alert_audio" / f"{alert_id}.mp3"
+    if not path.exists():
+        raise HTTPException(404, "Audio not yet generated")
+    return FileResponse(str(path), media_type="audio/mpeg")
 
 
 @app.get("/api/security/reports/{alert_id}/image")

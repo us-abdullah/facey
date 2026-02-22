@@ -32,17 +32,46 @@ export default function SecurityAlerts({ apiBase, viewerRole = 'C-Level' }) {
   const [showResolved, setShowResolved] = useState(false)
   const [generatingReport, setGeneratingReport] = useState({}) // alertId → true|false
   const previousAlertIdsRef = useRef(new Set())
+  const playedAudioRef = useRef(new Set())
+
+  // Auto-play ElevenLabs TTS when a new alert arrives with audio_url
+  const maybePlayAudio = useCallback((list) => {
+    for (const a of list) {
+      if (
+        a.audio_url &&
+        !a.resolution &&
+        !playedAudioRef.current.has(a.alert_id)
+      ) {
+        playedAudioRef.current.add(a.alert_id)
+        try {
+          const audio = new Audio(`${apiBase}${a.audio_url}`)
+          audio.volume = 1.0
+          audio.play().catch(() => {})
+        } catch {}
+        break // play one at a time
+      }
+    }
+  }, [apiBase])
 
   const fetchAlerts = useCallback(() => {
     fetch(`${apiBase}/security/alerts`)
       .then((r) => (r.ok ? r.json() : { alerts: [] }))
       .then((data) => {
         const list = Array.isArray(data?.alerts) ? data.alerts : []
+        // Detect new alerts with audio
+        const prevIds = previousAlertIdsRef.current
+        const newAlerts = list.filter((a) => !prevIds.has(a.alert_id))
+        if (newAlerts.length > 0) {
+          maybePlayAudio(newAlerts)
+        } else {
+          // Also try playing audio for existing alerts that just got audio_url
+          maybePlayAudio(list)
+        }
         previousAlertIdsRef.current = new Set(list.map((a) => a.alert_id))
         setAlerts(list)
       })
       .catch(() => {})
-  }, [apiBase])
+  }, [apiBase, maybePlayAudio])
 
   useEffect(() => {
     fetchAlerts()
@@ -223,6 +252,20 @@ function AlertRow({ alert, onGenerateReport, onProblemFixed, isGenerating, readO
 
         {alert.details && <div className="alert-details-text">{alert.details}</div>}
         <div className="alert-timestamp">{fmtTime(alert.timestamp)}</div>
+
+        {alert.audio_url && (
+          <button
+            type="button"
+            className="audio-play-btn"
+            onClick={() => {
+              const audio = new Audio(alert.audio_url)
+              audio.play().catch(() => {})
+            }}
+            title="Play voice alert"
+          >
+            🔊 Play Alert
+          </button>
+        )}
 
         {alert.recording_url && (
           <div className="alert-recording">
