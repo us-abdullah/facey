@@ -144,6 +144,8 @@ def send_escalation_voice_call(
     )
     if reasoning:
         spoken += f"{reasoning} "
+    if escalation_level.upper() == "CRITICAL":
+        spoken += "Authorities have been automatically contacted. "
     spoken += "Please check the security dashboard immediately."
 
     # Use inline TwiML via the `twiml` parameter (no hosted URL needed)

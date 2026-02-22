@@ -33,8 +33,34 @@ export default function SecurityAlerts({ apiBase, viewerRole = 'C-Level' }) {
   const [generatingReport, setGeneratingReport] = useState({}) // alertId → true|false
   const previousAlertIdsRef = useRef(new Set())
   const playedAudioRef = useRef(new Set())
+  const pingedAlertIdsRef = useRef(new Set())
+  const firstLoadRef = useRef(true)
 
-  // Auto-play ElevenLabs TTS when a new alert arrives with audio_url
+  // Play an urgent chime using Web Audio API (no file needed)
+  const playAlertChime = useCallback(() => {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)()
+      // Three descending tones: urgent alert pattern
+      const freqs = [880, 660, 880]
+      const durations = [0.15, 0.15, 0.3]
+      let t = ctx.currentTime
+      for (let i = 0; i < freqs.length; i++) {
+        const osc = ctx.createOscillator()
+        const gain = ctx.createGain()
+        osc.type = 'square'
+        osc.frequency.value = freqs[i]
+        gain.gain.setValueAtTime(0.3, t)
+        gain.gain.exponentialRampToValueAtTime(0.01, t + durations[i])
+        osc.connect(gain)
+        gain.connect(ctx.destination)
+        osc.start(t)
+        osc.stop(t + durations[i])
+        t += durations[i] + 0.05
+      }
+    } catch {}
+  }, [])
+
+  // Auto-play ElevenLabs TTS when an alert has audio_url ready
   const maybePlayAudio = useCallback((list) => {
     for (const a of list) {
       if (
@@ -46,7 +72,9 @@ export default function SecurityAlerts({ apiBase, viewerRole = 'C-Level' }) {
         try {
           const audio = new Audio(`${apiBase}${a.audio_url}`)
           audio.volume = 1.0
-          audio.play().catch(() => {})
+          audio.play().catch((err) => {
+            console.warn('Auto-play blocked by browser:', err.message)
+          })
         } catch {}
         break // play one at a time
       }
@@ -58,15 +86,22 @@ export default function SecurityAlerts({ apiBase, viewerRole = 'C-Level' }) {
       .then((r) => (r.ok ? r.json() : { alerts: [] }))
       .then((data) => {
         const list = Array.isArray(data?.alerts) ? data.alerts : []
-        // Detect new alerts with audio
-        const prevIds = previousAlertIdsRef.current
-        const newAlerts = list.filter((a) => !prevIds.has(a.alert_id))
-        if (newAlerts.length > 0) {
-          maybePlayAudio(newAlerts)
-        } else {
-          // Also try playing audio for existing alerts that just got audio_url
-          maybePlayAudio(list)
+
+        // Instant chime for brand-new alerts (skip on first page load)
+        if (!firstLoadRef.current) {
+          const hasNewUnresolved = list.some(
+            (a) => !a.resolution && !pingedAlertIdsRef.current.has(a.alert_id)
+          )
+          if (hasNewUnresolved) {
+            playAlertChime()
+            setOpen(true) // auto-open the alerts panel
+          }
         }
+        firstLoadRef.current = false
+        pingedAlertIdsRef.current = new Set(list.map((a) => a.alert_id))
+
+        // ElevenLabs TTS: check all unresolved alerts for playable audio
+        maybePlayAudio(list)
         previousAlertIdsRef.current = new Set(list.map((a) => a.alert_id))
         setAlerts(list)
       })
@@ -178,6 +213,7 @@ export default function SecurityAlerts({ apiBase, viewerRole = 'C-Level' }) {
                     <AlertRow
                       key={a.alert_id}
                       alert={a}
+                      apiBase={apiBase}
                       onGenerateReport={generateReport}
                       onProblemFixed={markProblemFixed}
                       isGenerating={!!generatingReport[a.alert_id]}
@@ -194,6 +230,7 @@ export default function SecurityAlerts({ apiBase, viewerRole = 'C-Level' }) {
                     <AlertRow
                       key={a.alert_id}
                       alert={a}
+                      apiBase={apiBase}
                       onGenerateReport={generateReport}
                       onProblemFixed={markProblemFixed}
                       isGenerating={!!generatingReport[a.alert_id]}
@@ -210,6 +247,7 @@ export default function SecurityAlerts({ apiBase, viewerRole = 'C-Level' }) {
                     <AlertRow
                       key={a.alert_id}
                       alert={a}
+                      apiBase={apiBase}
                       onGenerateReport={generateReport}
                       isGenerating={!!generatingReport[a.alert_id]}
                       readOnly
@@ -225,7 +263,7 @@ export default function SecurityAlerts({ apiBase, viewerRole = 'C-Level' }) {
   )
 }
 
-function AlertRow({ alert, onGenerateReport, onProblemFixed, isGenerating, readOnly = false }) {
+function AlertRow({ alert, apiBase, onGenerateReport, onProblemFixed, isGenerating, readOnly = false }) {
   const [showRec, setShowRec] = useState(false)
   const meta     = ALERT_META[alert.alert_type] || { icon: '⚠️', label: alert.alert_type, color: '#ef4444' }
   const resolved = alert.resolution === 'problem_fixed'
@@ -258,7 +296,7 @@ function AlertRow({ alert, onGenerateReport, onProblemFixed, isGenerating, readO
             type="button"
             className="audio-play-btn"
             onClick={() => {
-              const audio = new Audio(alert.audio_url)
+              const audio = new Audio(`${apiBase}${alert.audio_url}`)
               audio.play().catch(() => {})
             }}
             title="Play voice alert"

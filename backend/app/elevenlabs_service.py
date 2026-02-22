@@ -87,10 +87,14 @@ def build_alert_announcement(
     if escalation and escalation.get("recommended_response"):
         response = f" {escalation['recommended_response']}"
 
+    authorities = ""
+    if level.upper() == "CRITICAL":
+        authorities = " Authorities have been automatically contacted."
+
     text = (
         f"Security alert. {level} level. "
         f"{person_desc} detected in {zone}.{behavior}"
-        f"{response} "
+        f"{response}{authorities} "
         f"Check dashboard for details."
     )
     return text

@@ -1,6 +1,6 @@
 """
 AI Analysis Service – Multi-agent pipeline:
-  1. NVIDIA Nemotron Nano 12B VL v2    – visual analysis of the incident frame
+  1. NVIDIA Nemotron Nano 12B V2 VL    – visual analysis of the incident frame
   2. NVIDIA Nemotron Super 49B (Agent) – threat escalation reasoning
   3. Anthropic Claude                  – formal written security incident report
 
@@ -57,7 +57,7 @@ def analyze_frame_with_nemotron(
     person_name: str,
 ) -> dict:
     """
-    Send the incident frame to NVIDIA Nemotron Nano 12B VL v2.
+    Send the incident frame to NVIDIA Nemotron Nano 12B V2 VL.
     Returns a dict with keys: available, human_confirmed, physical_description,
     behavior, threat_level, observations, confidence.
     """
@@ -362,7 +362,7 @@ def write_report_with_claude(alert: dict, nemotron: dict, escalation: dict | Non
         f"Alert Type:    {alert_type}\n"
         f"Subject:       {subject_status}\n"
         f"Initial Log:   {alert.get('details', 'Unauthorized presence detected in restricted zone.')}\n\n"
-        f"VLM ANALYSIS (NVIDIA Nemotron Nano 12B VL v2)\n{vlm_section}\n\n"
+        f"VLM ANALYSIS (NVIDIA Nemotron Nano 12B V2 VL)\n{vlm_section}\n\n"
         f"{_escalation_prompt_section(escalation)}"
         f"Write the report with these exact section headings (plain text, no markdown):\n"
         f"EXECUTIVE SUMMARY\n"
@@ -423,7 +423,7 @@ def _fallback_report(alert: dict, nemotron: dict, escalation: dict | None = None
         f"Access Status: Unauthorized\n"
         f"Registration Status: Not registered in the face recognition system\n\n"
         f"VLM ANALYSIS SUMMARY\n"
-        f"Analysis System: NVIDIA Nemotron Nano 12B VL v2\n"
+        f"Analysis System: NVIDIA Nemotron Nano 12B V2 VL\n"
         f"Physical Description: {phys}\n"
         f"Observed Behavior: {behavior}\n"
         f"Security Observations: {obs}\n"

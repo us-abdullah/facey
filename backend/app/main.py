@@ -269,23 +269,7 @@ def _generate_incident_report_bg(alert_id: str, frame_bytes: bytes) -> None:
                 reasoning=escalation.get("reasoning", ""),
             )
 
-        # Step 3: Claude writes the formal report using VLM + escalation analysis
-        report_text = write_report_with_claude(alert, nemotron, escalation)
-        logger.info("Auto-report: Claude report done for %s", alert_id)
-
-        # Step 4: ReportLab generates the branded PDF
-        pdf_bytes = generate_pdf_report(alert, nemotron, report_text, _data_dir, escalation)
-
-        # Save PDF and threat image locally
-        reports_dir = _data_dir / "incident_reports"
-        reports_dir.mkdir(parents=True, exist_ok=True)
-        pdf_path = reports_dir / f"{alert_id}.pdf"
-        pdf_path.write_bytes(pdf_bytes)
-
-        img_path = reports_dir / f"{alert_id}_threat.jpg"
-        img_path.write_bytes(frame_bytes)
-
-        # Step 5: ElevenLabs TTS – spoken alert for dashboard auto-play
+        # Step 3: ElevenLabs TTS – generate immediately so dashboard plays it fast
         audio_url = None
         try:
             from app.elevenlabs_service import generate_alert_audio, build_alert_announcement
@@ -298,8 +282,34 @@ def _generate_incident_report_bg(alert_id: str, frame_bytes: bytes) -> None:
                 audio_path.write_bytes(audio_bytes)
                 audio_url = f"/api/security/alerts/{alert_id}/audio"
                 logger.info("Auto-report: ElevenLabs TTS saved for %s", alert_id)
+                # Save audio_url to alert JSON immediately so dashboard picks it up
+                alerts = _sload(_data_dir)
+                for a in alerts:
+                    if a.get("alert_id") == alert_id:
+                        a["audio_url"] = audio_url
+                        if escalation:
+                            a["escalation_level"] = escalation.get("escalation_level")
+                            a["escalation_reasoning"] = escalation.get("reasoning")
+                        break
+                _ssave(_data_dir, alerts)
         except Exception as e:
             logger.debug("ElevenLabs TTS skipped: %s", e)
+
+        # Step 4: Claude writes the formal report using VLM + escalation analysis
+        report_text = write_report_with_claude(alert, nemotron, escalation)
+        logger.info("Auto-report: Claude report done for %s", alert_id)
+
+        # Step 5: ReportLab generates the branded PDF
+        pdf_bytes = generate_pdf_report(alert, nemotron, report_text, _data_dir, escalation)
+
+        # Save PDF and threat image locally
+        reports_dir = _data_dir / "incident_reports"
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        pdf_path = reports_dir / f"{alert_id}.pdf"
+        pdf_path.write_bytes(pdf_bytes)
+
+        img_path = reports_dir / f"{alert_id}_threat.jpg"
+        img_path.write_bytes(frame_bytes)
 
         # Upload to Supabase Storage
         try:
@@ -325,8 +335,6 @@ def _generate_incident_report_bg(alert_id: str, frame_bytes: bytes) -> None:
             if a.get("alert_id") == alert_id:
                 a["report_url"] = f"/api/security/reports/{alert_id}"
                 a["threat_image_url"] = f"/api/security/reports/{alert_id}/image"
-                if audio_url:
-                    a["audio_url"] = audio_url
                 if escalation:
                     a["escalation_level"] = escalation.get("escalation_level")
                     a["escalation_reasoning"] = escalation.get("reasoning")

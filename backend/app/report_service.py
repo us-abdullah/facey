@@ -506,7 +506,7 @@ def generate_pdf_report(
     # VLM ANALYSIS
     # ===================================================================
     story.append(_section_banner(
-        "VLM ANALYSIS — NVIDIA NEMOTRON NANO 12B VL v2", styles
+        "VLM ANALYSIS — NVIDIA NEMOTRON NANO 12B V2 VL", styles
     ))
     story.append(Spacer(1, 0.2 * cm))
 
